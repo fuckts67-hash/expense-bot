@@ -35,10 +35,23 @@ CATEGORY_EMOJI = {
 
 
 async def get_category_ai(description: str) -> str:
-    categories = list(CATEGORY_EMOJI.keys())
-    prompt = f"""Определи категорию для расхода: "{description}"
-Категории: {', '.join(categories)}
-Ответь ТОЛЬКО одним словом — название категории из списка."""
+    prompt = f"""Ты определяешь категорию трат для финансового бота.
+
+Расход: "{description}"
+
+Категории и примеры:
+- супермаркеты: Пятёрочка, Магнит, Перекрёсток, продукты, Fix Price, Ярче
+- фастфуд: шаурма, KFC, McDonald's, бургер, пицца, буфет, столовая, еда, донер, rolls
+- транспорт: метро, автобус, Тройка, электричка, такси, Яндекс такси
+- самокаты: Яндекс Go самокат, кикшеринг, самокат
+- связь: МТС, t2, Билайн, телефон, симка
+- подписки: Netflix, Spotify, Premier, кино, стриминг, HIT, Иви
+- здоровье: аптека, врач, лекарства, спортзал, фитнес
+- развлечения: игры, бар, клуб, концерт, боулинг
+- услуги банка: обслуживание, комиссия, банк
+- другое: всё остальное
+
+Ответь ТОЛЬКО одним словом из списка категорий без точки и лишних символов."""
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
@@ -47,8 +60,9 @@ async def get_category_ai(description: str) -> str:
             async with session.post(url, json=payload) as resp:
                 data = await resp.json()
                 result = data["candidates"][0]["content"]["parts"][0]["text"].strip().lower()
-                if result in CATEGORY_EMOJI:
-                    return result
+                for category in CATEGORY_EMOJI.keys():
+                    if category in result:
+                        return category
     except:
         pass
     return "другое"
