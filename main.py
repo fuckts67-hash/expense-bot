@@ -1,280 +1,141 @@
-import asyncio
-import os
-import re
-import aiohttp
-
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import CommandStart, Command
-from dotenv import load_dotenv
-import asyncpg
-
-load_dotenv()
-
-TOKEN = os.getenv("BOT_TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-bot = Bot(token=TOKEN)
-dp = Dispatcher()
-db = None
-
 CATEGORY_EMOJI = {
-    "супермаркеты": "🛒",
-    "фастфуд": "🍔",
-    "транспорт": "🚇",
-    "самокаты": "🛴",
-    "связь": "📱",
-    "подписки": "🎬",
+    "еда": "🍔",
+    "транспорт": "🚕",
+    "авто": "⛽",
+    "жкх": "🏠",
     "здоровье": "💊",
-    "развлечения": "🎮",
-    "услуги банка": "💳",
+    "одежда": "👕",
+    "техника": "💻",
+    "игры": "🎮",
+    "подписки": "🎬",
+    "образование": "📚",
+    "штрафы": "⚖️",
+    "банк": "🏦",
+    "подарки": "🎁",
     "другое": "📦",
 }
 
 KEYWORDS = {
-    "супермаркеты": [
+    "еда": [
         "пятёрочка", "пятерочка", "магнит", "перекрёсток", "перекресток",
-        "ярче", "клад мармелада", "дикси", "вкусвилл", "окей", "лента",
-        "ашан", "metro", "spar", "fix price", "фикс прайс", "светофор",
-        "продукты", "супермаркет", "гипермаркет", "продмаг"
-    ],
-    "фастфуд": [
-        "шаурма", "kfc", "кфс", "mcdonalds", "макдоналдс", "макдак",
-        "бургер", "burger", "пицца", "pizza", "суши", "sushi", "роллы",
-        "буфет", "столовая", "шашлык", "донер", "фастфуд", "доставка еды",
-        "яндекс еда", "delivery club", "самокат доставка", "вкусно и точка",
-        "поппитс", "папа джонс", "domino", "додо", "dodo", "теремок",
-        "чебуречная", "беляши", "хинкали", "лаваш", "sandwich", "сэндвич"
+        "лента", "ашан", "ashan", "вкусвилл", "дикси", "spar", "спар",
+        "ярче", "окей", "o'key", "метро кэш", "глобус", "бахетле",
+        "красное белое", "красное & белое", "кб", "мяснов", "избёнка",
+        "светофор", "fix price", "фикс прайс", "клад мармелада",
+        "самокат доставка", "яндекс еда", "delivery club", "деливери",
+        "додо", "dodo pizza", "бургер кинг", "burger king",
+        "вкусно и точка", "kfc", "кфс", "ростикс", "rostics",
+        "mcdonalds", "макдоналдс", "макдак", "subway", "сабвей",
+        "папа джонс", "papa johns", "dominos", "домино",
+        "танuki", "tanuki", "суши", "sushi", "роллы", "wok",
+        "шаурма", "донер", "лаваш", "хачапури", "хинкали",
+        "пицца", "pizza", "бургер", "burger", "шашлык",
+        "буфет", "столовая", "кафе", "ресторан", "еда",
+        "продукты", "гипермаркет", "супермаркет", "продмаг",
+        "фастфуд", "теремок", "чебуречная", "беляши",
+        "coffee", "кофе", "starbucks", "старбакс", "cofix",
+        "шоколадница", "coffee like", "traveler's coffee",
+        "булочная", "пекарня", "хлеб", "выпечка",
     ],
     "транспорт": [
-        "тройка", "метро", "московский метрополитен", "автобус", "троллейбус",
-        "трамвай", "электричка", "московско-тверская", "ласточка", "сапсан",
-        "такси", "яндекс такси", "яндекс го такси", "uber", "убер",
+        "яндекс такси", "яндекс го такси", "uber", "убер",
+        "тройка", "метро", "московский метрополитен",
+        "автобус", "троллейбус", "трамвай",
+        "электричка", "ржд", "российские железные",
+        "московско-тверская", "аэроэкспресс", "ласточка", "сапсан",
         "каршеринг", "делимобиль", "ситидрайв", "яндекс драйв",
-        "аэроэкспресс", "жд", "ржд", "билет", "автовокзал"
+        "самокат", "яндекс го самокат", "whoosh", "вуш",
+        "urent", "юрент", "кикшеринг",
+        "автовокзал", "билет", "проезд", "транспорт",
+        "такси", "маршрутка",
     ],
-    "самокаты": [
-        "самокат", "яндекс го самокат", "самокаты яндекс",
-        "кикшеринг", "whoosh", "вуш", "urent", "юрент", "molnia"
+    "авто": [
+        "лукойл", "газпромнефть", "роснефть", "татнефть",
+        "shell", "bp", "азс", "заправка", "бензин",
+        "автомойка", "мойка", "шиномонтаж", "автосервис",
+        "автозапчасти", "exist", "autodoc", "авито авто",
+        "осаго", "каско", "автострахование", "техосмотр",
+        "паркинг", "парковка", "parking",
     ],
-    "связь": [
-        "мтс", "mts", "билайн", "beeline", "мегафон", "megafon",
-        "t2", "теле2", "tele2", "йота", "yota", "ростелеком",
-        "интернет", "связь", "телефон", "симка", "тариф"
-    ],
-    "подписки": [
-        "netflix", "нетфликс", "spotify", "спотифай", "premier", "премьер",
-        "иви", "ivi", "кинопоиск", "okko", "окко", "more.tv", "start",
-        "hit", "хит", "яндекс плюс", "vk music", "яндекс музыка",
-        "apple music", "youtube premium", "twitch", "discord nitro",
-        "подписка", "онлайн кинотеатр", "стриминг", "onlipay"
+    "жкх": [
+        "жкх", "коммунальные", "электроэнергия", "мосэнерго",
+        "газ", "мосгаз", "водоканал", "мосводоканал",
+        "теплосеть", "управляющая компания", "тсж",
+        "аренда", "квартплата", "капремонт", "домофон",
+        "интернет дом", "ростелеком интернет",
     ],
     "здоровье": [
-        "аптека", "apteka", "горздрав", "36.6", "самсон", "планета здоровья",
-        "врач", "доктор", "клиника", "больница", "стоматолог", "зубной",
-        "лекарства", "таблетки", "витамины", "спортзал", "фитнес",
-        "world class", "x-fit", "smart fit", "orange fitness"
+        "аптека", "apteka", "горздрав", "36.6", "самсон фарма",
+        "ригла", "еаптека", "планета здоровья", "живика",
+        "врач", "доктор", "клиника", "больница", "поликлиника",
+        "стоматолог", "зубной", "медцентр", "медклиника",
+        "лекарства", "таблетки", "витамины", "рецепт",
+        "спортзал", "фитнес", "world class", "x-fit",
+        "smart fit", "orange fitness", "физра",
     ],
-    "развлечения": [
-        "кино", "кинотеатр", "синема", "cinema", "imax", "4dx",
-        "концерт", "театр", "музей", "выставка", "боулинг", "бильярд",
-        "бар", "паб", "клуб", "ночной клуб", "игры", "steam", "playstation",
-        "xbox", "nintendo", "игровой", "escape room", "квест",
-        "karting", "картинг", "батут", "аквапарк"
+    "одежда": [
+        "zara", "зара", "h&m", "hm", "uniqlo", "юникло",
+        "pull&bear", "bershka", "stradivarius", "mango",
+        "massimo dutti", "reserved", "reserved",
+        "befree", "твое", "твоё", "gloria jeans", "глория",
+        "ostin", "остин", "том фарр", "tom farr",
+        "adidas", "nike", "reebok", "puma", "new balance",
+        "wildberries", "вайлдберриз", "wb", "ozon одежда",
+        "lamoda", "ламода", "одежда", "обувь", "магазин одежды",
     ],
-    "услуги банка": [
-        "плата за обслуживание", "обслуживание карты", "комиссия банка",
-        "страховка", "смс информирование", "годовое обслуживание"
+    "техника": [
+        "dns", "днс", "мвидео", "м.видео", "эльдорадо",
+        "ситилинк", "citilink", "технопарк",
+        "apple", "эпл", "iphone", "samsung", "xiaomi",
+        "компьютер", "ноутбук", "телефон", "планшет",
+        "электроника", "гаджет",
+    ],
+    "игры": [
+        "steam", "стим", "epic games", "эпик",
+        "xbox", "иксбокс", "playstation", "плейстейшн", "ps store",
+        "nintendo", "нинтендо", "app store игры", "google play игры",
+        "игра", "gaming",
+    ],
+    "подписки": [
+        "netflix", "нетфликс", "spotify", "спотифай",
+        "premier", "премьер", "иви", "ivi", "кинопоиск",
+        "okko", "окко", "more.tv", "start.ru",
+        "hit", "хит", "яндекс плюс", "яндекс+",
+        "vk music", "яндекс музыка", "apple music",
+        "youtube premium", "twitch", "discord nitro",
+        "chatgpt", "chat gpt", "openai", "midjourney",
+        "onlipay", "подписка", "стриминг",
+    ],
+    "образование": [
+        "skillbox", "скиллбокс", "geekbrains", "гикбрейнс",
+        "coursera", "курсера", "stepik", "степик",
+        "яндекс практикум", "нетология", "otus",
+        "учёба", "курс", "обучение", "школа", "университет",
+        "репетитор", "тренинг",
+    ],
+    "штрафы": [
+        "штраф", "гибдд", "фссп", "налог", "налоговая",
+        "госпошлина", "пени", "задолженность",
+        "госуслуги", "мфц",
+    ],
+    "банк": [
+        "плата за обслуживание", "обслуживание карты",
+        "комиссия банка", "смс информирование",
+        "годовое обслуживание", "страховка банк",
+        "услуги банка", "тинькофф", "сбербанк", "втб",
+        "альфа банк", "т-банк",
+    ],
+    "подарки": [
+        "подарок", "цветы", "букет", "florist",
+        "1с флорист", "цветочный", "сувенир",
     ],
 }
 
-def get_category_local(description: str) -> str:
+
+def get_category_local(description: str) -> str | None:
     desc = description.lower().strip()
     for category, keywords in KEYWORDS.items():
         for kw in keywords:
             if kw in desc:
                 return category
     return None
-
-async def get_category_ai(description: str) -> str:
-    # Сначала пробуем локально
-    local = get_category_local(description)
-    if local:
-        return local
-
-    # Если не нашли — пробуем Gemini
-    if GEMINI_API_KEY:
-        prompt = f"""Ты определяешь категорию трат для финансового бота в России.
-
-Расход: "{description}"
-
-Категории:
-- супермаркеты: продуктовые магазины, Пятёрочка, Магнит, Перекрёсток
-- фастфуд: еда навынос, рестораны быстрого питания, шаурма, бургеры
-- транспорт: метро, автобус, такси, электричка, каршеринг
-- самокаты: кикшеринг, самокаты, Whoosh, Юрент
-- связь: мобильная связь, интернет, МТС, Билайн
-- подписки: стриминг, онлайн-кинотеатры, музыка
-- здоровье: аптека, врачи, фитнес
-- развлечения: кино, концерты, бары, игры
-- услуги банка: банковские комиссии и обслуживание
-- другое: всё остальное
-
-Ответь ТОЛЬКО одним словом — название категории."""
-
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-            payload = {"contents": [{"parts": [{"text": prompt}]}]}
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    data = await resp.json()
-                    result = data["candidates"][0]["content"]["parts"][0]["text"].strip().lower()
-                    for category in CATEGORY_EMOJI.keys():
-                        if category in result:
-                            return category
-        except:
-            pass
-
-    return "другое"
-
-
-def main_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
-        [InlineKeyboardButton(text="📋 История", callback_data="history")],
-        [InlineKeyboardButton(text="🗑 Удалить последнее", callback_data="delete_last")],
-    ])
-
-
-async def init_db():
-    global db
-    db = await asyncpg.connect(DATABASE_URL)
-    await db.execute('''
-        CREATE TABLE IF NOT EXISTS transactions (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            description TEXT,
-            amount FLOAT,
-            category TEXT DEFAULT 'другое',
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    ''')
-    try:
-        await db.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'другое'")
-    except:
-        pass
-
-
-@dp.message(CommandStart())
-async def start(message: Message):
-    await message.answer(
-        "💸 Привет! Я помогу отслеживать расходы.\n\n"
-        "Просто напиши:\n<b>кофе 4</b> или <b>шаурма 100</b>\n\n"
-        "Я сам определю категорию 🧠",
-        parse_mode="HTML",
-        reply_markup=main_keyboard()
-    )
-
-
-@dp.message(Command("stats"))
-async def stats_cmd(message: Message):
-    await show_stats(message.from_user.id, message)
-
-
-@dp.callback_query(F.data == "stats")
-async def stats_callback(callback: CallbackQuery):
-    await show_stats(callback.from_user.id, callback.message)
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "history")
-async def history_callback(callback: CallbackQuery):
-    rows = await db.fetch(
-        'SELECT description, amount, category, created_at FROM transactions WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10',
-        callback.from_user.id
-    )
-    if not rows:
-        await callback.message.answer("Расходов пока нет!")
-        await callback.answer()
-        return
-    text = "📋 <b>Последние 10 расходов:</b>\n\n"
-    for row in rows:
-        emoji = CATEGORY_EMOJI.get(row['category'], "📦")
-        date = row['created_at'].strftime("%d.%m %H:%M")
-        text += f"{emoji} {row['description']} — {row['amount']}₽ <i>({date})</i>\n"
-    await callback.message.answer(text, parse_mode="HTML", reply_markup=main_keyboard())
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "delete_last")
-async def delete_last_callback(callback: CallbackQuery):
-    row = await db.fetchrow(
-        'SELECT id, description, amount FROM transactions WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1',
-        callback.from_user.id
-    )
-    if not row:
-        await callback.message.answer("Нечего удалять!")
-        await callback.answer()
-        return
-    await db.execute('DELETE FROM transactions WHERE id=$1', row['id'])
-    await callback.message.answer(
-        f"🗑 Удалено: {row['description']} — {row['amount']}₽",
-        reply_markup=main_keyboard()
-    )
-    await callback.answer()
-
-
-async def show_stats(user_id: int, message: Message):
-    rows = await db.fetch(
-        'SELECT category, SUM(amount) as total FROM transactions WHERE user_id=$1 GROUP BY category ORDER BY total DESC',
-        user_id
-    )
-    if not rows:
-        await message.answer("Расходов пока нет!")
-        return
-    total_all = sum(row['total'] for row in rows)
-    text = "📊 <b>Статистика по категориям:</b>\n\n"
-    for row in rows:
-        emoji = CATEGORY_EMOJI.get(row['category'], "📦")
-        percent = (row['total'] / total_all) * 100
-        text += f"{emoji} {row['category'].capitalize()} — {row['total']:.1f}₽ ({percent:.0f}%)\n"
-    text += f"\n💰 <b>Всего: {total_all:.1f}₽</b>"
-    await message.answer(text, parse_mode="HTML", reply_markup=main_keyboard())
-
-
-@dp.message()
-async def add_expense(message: Message):
-    match = re.match(r'^(.+?)\s+(\d+\.?\d*)$', message.text.strip())
-    if not match:
-        await message.answer(
-            "❌ Не понял. Напиши так:\n<b>кофе 4</b> или <b>такси 12.5</b>",
-            parse_mode="HTML",
-            reply_markup=main_keyboard()
-        )
-        return
-    description = match.group(1)
-    amount = float(match.group(2))
-
-    thinking_msg = await message.answer("🧠 Определяю категорию...")
-    category = await get_category_ai(description)
-    await thinking_msg.delete()
-
-    emoji = CATEGORY_EMOJI.get(category, "📦")
-    await db.execute(
-        'INSERT INTO transactions (user_id, description, amount, category) VALUES ($1, $2, $3, $4)',
-        message.from_user.id, description, amount, category
-    )
-    await message.answer(
-        f"✅ Записал: {description} — {amount}₽\n{emoji} Категория: {category}",
-        reply_markup=main_keyboard()
-    )
-
-
-async def main():
-    await init_db()
-    await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
