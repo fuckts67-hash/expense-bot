@@ -1,7 +1,6 @@
 import asyncio
 import os
 import re
-import json
 import aiohttp
 
 from aiogram import Bot, Dispatcher, F
@@ -33,38 +32,110 @@ CATEGORY_EMOJI = {
     "другое": "📦",
 }
 
+KEYWORDS = {
+    "супермаркеты": [
+        "пятёрочка", "пятерочка", "магнит", "перекрёсток", "перекресток",
+        "ярче", "клад мармелада", "дикси", "вкусвилл", "окей", "лента",
+        "ашан", "metro", "spar", "fix price", "фикс прайс", "светофор",
+        "продукты", "супермаркет", "гипермаркет", "продмаг"
+    ],
+    "фастфуд": [
+        "шаурма", "kfc", "кфс", "mcdonalds", "макдоналдс", "макдак",
+        "бургер", "burger", "пицца", "pizza", "суши", "sushi", "роллы",
+        "буфет", "столовая", "шашлык", "донер", "фастфуд", "доставка еды",
+        "яндекс еда", "delivery club", "самокат доставка", "вкусно и точка",
+        "поппитс", "папа джонс", "domino", "додо", "dodo", "теремок",
+        "чебуречная", "беляши", "хинкали", "лаваш", "sandwich", "сэндвич"
+    ],
+    "транспорт": [
+        "тройка", "метро", "московский метрополитен", "автобус", "троллейбус",
+        "трамвай", "электричка", "московско-тверская", "ласточка", "сапсан",
+        "такси", "яндекс такси", "яндекс го такси", "uber", "убер",
+        "каршеринг", "делимобиль", "ситидрайв", "яндекс драйв",
+        "аэроэкспресс", "жд", "ржд", "билет", "автовокзал"
+    ],
+    "самокаты": [
+        "самокат", "яндекс го самокат", "самокаты яндекс",
+        "кикшеринг", "whoosh", "вуш", "urent", "юрент", "molnia"
+    ],
+    "связь": [
+        "мтс", "mts", "билайн", "beeline", "мегафон", "megafon",
+        "t2", "теле2", "tele2", "йота", "yota", "ростелеком",
+        "интернет", "связь", "телефон", "симка", "тариф"
+    ],
+    "подписки": [
+        "netflix", "нетфликс", "spotify", "спотифай", "premier", "премьер",
+        "иви", "ivi", "кинопоиск", "okko", "окко", "more.tv", "start",
+        "hit", "хит", "яндекс плюс", "vk music", "яндекс музыка",
+        "apple music", "youtube premium", "twitch", "discord nitro",
+        "подписка", "онлайн кинотеатр", "стриминг", "onlipay"
+    ],
+    "здоровье": [
+        "аптека", "apteka", "горздрав", "36.6", "самсон", "планета здоровья",
+        "врач", "доктор", "клиника", "больница", "стоматолог", "зубной",
+        "лекарства", "таблетки", "витамины", "спортзал", "фитнес",
+        "world class", "x-fit", "smart fit", "orange fitness"
+    ],
+    "развлечения": [
+        "кино", "кинотеатр", "синема", "cinema", "imax", "4dx",
+        "концерт", "театр", "музей", "выставка", "боулинг", "бильярд",
+        "бар", "паб", "клуб", "ночной клуб", "игры", "steam", "playstation",
+        "xbox", "nintendo", "игровой", "escape room", "квест",
+        "karting", "картинг", "батут", "аквапарк"
+    ],
+    "услуги банка": [
+        "плата за обслуживание", "обслуживание карты", "комиссия банка",
+        "страховка", "смс информирование", "годовое обслуживание"
+    ],
+}
+
+def get_category_local(description: str) -> str:
+    desc = description.lower().strip()
+    for category, keywords in KEYWORDS.items():
+        for kw in keywords:
+            if kw in desc:
+                return category
+    return None
 
 async def get_category_ai(description: str) -> str:
-    prompt = f"""Ты определяешь категорию трат для финансового бота.
+    # Сначала пробуем локально
+    local = get_category_local(description)
+    if local:
+        return local
+
+    # Если не нашли — пробуем Gemini
+    if GEMINI_API_KEY:
+        prompt = f"""Ты определяешь категорию трат для финансового бота в России.
 
 Расход: "{description}"
 
-Категории и примеры:
-- супермаркеты: Пятёрочка, Магнит, Перекрёсток, продукты, Fix Price, Ярче
-- фастфуд: шаурма, KFC, McDonald's, бургер, пицца, буфет, столовая, еда, донер, rolls
-- транспорт: метро, автобус, Тройка, электричка, такси, Яндекс такси
-- самокаты: Яндекс Go самокат, кикшеринг, самокат
-- связь: МТС, t2, Билайн, телефон, симка
-- подписки: Netflix, Spotify, Premier, кино, стриминг, HIT, Иви
-- здоровье: аптека, врач, лекарства, спортзал, фитнес
-- развлечения: игры, бар, клуб, концерт, боулинг
-- услуги банка: обслуживание, комиссия, банк
+Категории:
+- супермаркеты: продуктовые магазины, Пятёрочка, Магнит, Перекрёсток
+- фастфуд: еда навынос, рестораны быстрого питания, шаурма, бургеры
+- транспорт: метро, автобус, такси, электричка, каршеринг
+- самокаты: кикшеринг, самокаты, Whoosh, Юрент
+- связь: мобильная связь, интернет, МТС, Билайн
+- подписки: стриминг, онлайн-кинотеатры, музыка
+- здоровье: аптека, врачи, фитнес
+- развлечения: кино, концерты, бары, игры
+- услуги банка: банковские комиссии и обслуживание
 - другое: всё остальное
 
-Ответь ТОЛЬКО одним словом из списка категорий без точки и лишних символов."""
+Ответь ТОЛЬКО одним словом — название категории."""
 
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as resp:
-                data = await resp.json()
-                result = data["candidates"][0]["content"]["parts"][0]["text"].strip().lower()
-                for category in CATEGORY_EMOJI.keys():
-                    if category in result:
-                        return category
-    except:
-        pass
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+            payload = {"contents": [{"parts": [{"text": prompt}]}]}
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    data = await resp.json()
+                    result = data["candidates"][0]["content"]["parts"][0]["text"].strip().lower()
+                    for category in CATEGORY_EMOJI.keys():
+                        if category in result:
+                            return category
+        except:
+            pass
+
     return "другое"
 
 
@@ -100,7 +171,7 @@ async def start(message: Message):
     await message.answer(
         "💸 Привет! Я помогу отслеживать расходы.\n\n"
         "Просто напиши:\n<b>кофе 4</b> или <b>шаурма 100</b>\n\n"
-        "Я сам определю категорию с помощью AI 🧠",
+        "Я сам определю категорию 🧠",
         parse_mode="HTML",
         reply_markup=main_keyboard()
     )
