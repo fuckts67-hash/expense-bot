@@ -6,6 +6,9 @@ import aiohttp
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart, Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
 import asyncpg
 from categories import CATEGORY_EMOJI, get_category_local
@@ -17,8 +20,13 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 bot = Bot(token=TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
 db = None
+
+
+class Form(StatesGroup):
+    waiting_income = State()
+    waiting_expense = State()
 
 
 async def get_category_ai(description: str) -> str:
@@ -92,9 +100,8 @@ async def start(message: Message):
         "Я помогу тебе:\n"
         "💸 Отслеживать расходы\n"
         "💰 Записывать доходы\n"
-        "📊 Смотреть статистику\n"
-        "🧠 Анализировать траты с помощью AI\n\n"
-        "Нажми кнопку ниже чтобы узнать больше 👇",
+        "📊 Смотреть статистику\n\n"
+        "Нажми кнопку ниже 👇",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🤖 Что умеет бот?", callback_data="about")],
@@ -107,19 +114,14 @@ async def start(message: Message):
 async def about_callback(callback: CallbackQuery):
     await callback.message.answer(
         "🤖 <b>Что умеет этот бот?</b>\n\n"
-        "📝 <b>Записывать расходы</b>\n"
-        "Просто напиши: <code>шаурма 100</code>\n"
-        "Бот сам определит категорию 🧠\n\n"
-        "💰 <b>Записывать доходы</b>\n"
-        "Напиши: <code>+зарплата 50000</code>\n\n"
-        "📊 <b>Статистика</b>\n"
-        "За день, неделю или месяц\n\n"
-        "🏷 <b>Категории</b>\n"
+        "➕ <b>Доход</b> — нажми кнопку и напиши сумму\n"
+        "➖ <b>Расход</b> — нажми кнопку и напиши трату\n"
+        "📊 <b>Статистика</b> — за день, неделю, месяц\n"
+        "📋 <b>История</b> — последние 10 записей\n\n"
+        "🏷 <b>Категории определяются автоматически:</b>\n"
         "🍔 Еда · 🚕 Транспорт · ⛽ Авто\n"
         "💊 Здоровье · 🎬 Подписки · 🎮 Игры\n"
-        "👕 Одежда · 💻 Техника · ⚖️ Штрафы\n\n"
-        "📋 <b>История</b> — последние 10 записей\n"
-        "🗑 <b>Удаление</b> — удали последнюю запись",
+        "👕 Одежда · 💻 Техника · ⚖️ Штрафы",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🚀 Начать", callback_data="go")],
@@ -131,10 +133,7 @@ async def about_callback(callback: CallbackQuery):
 @dp.callback_query(F.data == "go")
 async def go_callback(callback: CallbackQuery):
     await callback.message.answer(
-        "✅ <b>Отлично! Ты готов.</b>\n\n"
-        "Напиши свой первый расход:\n"
-        "<code>кофе 150</code>\n\n"
-        "Или используй кнопки 👇",
+        "✅ <b>Отлично! Используй кнопки ниже.</b>",
         parse_mode="HTML",
         reply_markup=main_keyboard()
     )
@@ -142,21 +141,65 @@ async def go_callback(callback: CallbackQuery):
 
 
 @dp.callback_query(F.data == "add_income")
-async def add_income_prompt(callback: CallbackQuery):
-    await callback.message.answer(
-        "💰 Напиши доход:\n<b>+зарплата 50000</b>",
-        parse_mode="HTML"
-    )
+async def add_income_prompt(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(Form.waiting_income)
+    await callback.message.answer("💰 Напиши свой доход:\nПример: <b>зарплата 50000</b>", parse_mode="HTML")
     await callback.answer()
 
 
 @dp.callback_query(F.data == "add_expense")
-async def add_expense_prompt(callback: CallbackQuery):
-    await callback.message.answer(
-        "💸 Напиши расход:\n<b>шаурма 100</b>",
-        parse_mode="HTML"
-    )
+async def add_expense_prompt(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(Form.waiting_expense)
+    await callback.message.answer("💸 Напиши свой расход:\nПример: <b>кофе 150</b>", parse_mode="HTML")
     await callback.answer()
+
+
+@dp.message(Form.waiting_income)
+async def process_income(message: Message, state: FSMContext):
+    text = message.text.strip()
+    match = re.match(r'^(.+?)\s+(\d+\.?\d*)$', text) or re.match(r'^(\d+\.?\d*)$', text)
+    if not match:
+        await message.answer("❌ Не понял. Напиши так: <b>зарплата 50000</b>", parse_mode="HTML")
+        return
+    if len(match.groups()) == 2:
+        description = match.group(1)
+        amount = float(match.group(2))
+    else:
+        description = "доход"
+        amount = float(match.group(1))
+    await db.execute(
+        'INSERT INTO transactions (user_id, description, amount, category, type) VALUES ($1, $2, $3, $4, $5)',
+        message.from_user.id, description, amount, "доход", "income"
+    )
+    await state.clear()
+    await message.answer(
+        f"💰 Записал доход: {description} — {amount:.0f}₽",
+        reply_markup=main_keyboard()
+    )
+
+
+@dp.message(Form.waiting_expense)
+async def process_expense(message: Message, state: FSMContext):
+    text = message.text.strip()
+    match = re.match(r'^(.+?)\s+(\d+\.?\d*)$', text)
+    if not match:
+        await message.answer("❌ Не понял. Напиши так: <b>кофе 150</b>", parse_mode="HTML")
+        return
+    description = match.group(1)
+    amount = float(match.group(2))
+    thinking_msg = await message.answer("🧠 Определяю категорию...")
+    category = await get_category_ai(description)
+    await thinking_msg.delete()
+    emoji = CATEGORY_EMOJI.get(category, "📦")
+    await db.execute(
+        'INSERT INTO transactions (user_id, description, amount, category, type) VALUES ($1, $2, $3, $4, $5)',
+        message.from_user.id, description, amount, category, "expense"
+    )
+    await state.clear()
+    await message.answer(
+        f"✅ Записал: {description} — {amount:.0f}₽\n{emoji} Категория: {category}",
+        reply_markup=main_keyboard()
+    )
 
 
 @dp.callback_query(F.data == "stats")
@@ -254,10 +297,8 @@ async def show_stats(user_id: int, message: Message, period: str = "all"):
     balance = income - total_expenses
 
     text = f"📊 <b>Статистика {period_name}:</b>\n\n"
-
     if income > 0:
         text += f"💰 <b>Доходы: {income:.0f}₽</b>\n\n"
-
     if expenses:
         text += "💸 <b>Расходы по категориям:</b>\n"
         for row in expenses:
@@ -265,7 +306,6 @@ async def show_stats(user_id: int, message: Message, period: str = "all"):
             percent = (row['total'] / total_expenses * 100) if total_expenses > 0 else 0
             text += f"{emoji} {row['category'].capitalize()} — {row['total']:.0f}₽ ({percent:.0f}%)\n"
         text += f"\n💸 <b>Итого расходов: {total_expenses:.0f}₽</b>\n"
-
     if income > 0:
         if balance >= 0:
             text += f"\n✅ <b>Остаток: {balance:.0f}₽</b>"
@@ -277,47 +317,8 @@ async def show_stats(user_id: int, message: Message, period: str = "all"):
 
 @dp.message()
 async def handle_message(message: Message):
-    text = message.text.strip()
-
-    income_match = re.match(r'^\+(.+?)\s+(\d+\.?\d*)$', text) or re.match(r'^\+(\d+\.?\d*)$', text)
-    if income_match:
-        if len(income_match.groups()) == 2:
-            description = income_match.group(1)
-            amount = float(income_match.group(2))
-        else:
-            description = "доход"
-            amount = float(income_match.group(1))
-        await db.execute(
-            'INSERT INTO transactions (user_id, description, amount, category, type) VALUES ($1, $2, $3, $4, $5)',
-            message.from_user.id, description, amount, "доход", "income"
-        )
-        await message.answer(
-            f"💰 Записал доход: {description} — {amount:.0f}₽",
-            reply_markup=main_keyboard()
-        )
-        return
-
-    expense_match = re.match(r'^(.+?)\s+(\d+\.?\d*)$', text)
-    if expense_match:
-        description = expense_match.group(1)
-        amount = float(expense_match.group(2))
-        thinking_msg = await message.answer("🧠 Определяю категорию...")
-        category = await get_category_ai(description)
-        await thinking_msg.delete()
-        emoji = CATEGORY_EMOJI.get(category, "📦")
-        await db.execute(
-            'INSERT INTO transactions (user_id, description, amount, category, type) VALUES ($1, $2, $3, $4, $5)',
-            message.from_user.id, description, amount, category, "expense"
-        )
-        await message.answer(
-            f"✅ Записал: {description} — {amount:.0f}₽\n{emoji} Категория: {category}",
-            reply_markup=main_keyboard()
-        )
-        return
-
     await message.answer(
-        "❌ Не понял. Напиши:\n<b>шаурма 100</b> — расход\n<b>+зарплата 50000</b> — доход",
-        parse_mode="HTML",
+        "Используй кнопки 👇",
         reply_markup=main_keyboard()
     )
 
