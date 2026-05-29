@@ -49,8 +49,19 @@ async def get_category_ai(description: str) -> str:
 
 def main_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
-        [InlineKeyboardButton(text="📋 История", callback_data="history")],
+        [
+            InlineKeyboardButton(text="➕ Доход", callback_data="add_income"),
+            InlineKeyboardButton(text="➖ Расход", callback_data="add_expense"),
+        ],
+        [
+            InlineKeyboardButton(text="📊 Статистика", callback_data="stats"),
+            InlineKeyboardButton(text="📋 История", callback_data="history"),
+        ],
+        [
+            InlineKeyboardButton(text="📅 За день", callback_data="stats_day"),
+            InlineKeyboardButton(text="📅 За неделю", callback_data="stats_week"),
+            InlineKeyboardButton(text="📅 За месяц", callback_data="stats_month"),
+        ],
         [InlineKeyboardButton(text="🗑 Удалить последнее", callback_data="delete_last")],
     ])
 
@@ -65,11 +76,13 @@ async def init_db():
             description TEXT,
             amount FLOAT,
             category TEXT DEFAULT 'другое',
+            type TEXT DEFAULT 'expense',
             created_at TIMESTAMP DEFAULT NOW()
         )
     ''')
     try:
         await db.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'другое'")
+        await db.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'expense'")
     except:
         pass
 
@@ -77,40 +90,75 @@ async def init_db():
 @dp.message(CommandStart())
 async def start(message: Message):
     await message.answer(
-        "💸 Привет! Я помогу отслеживать расходы.\n\n"
-        "Просто напиши:\n<b>кофе 4</b> или <b>шаурма 100</b>\n\n"
-        "Я сам определю категорию 🧠",
+        "💸 <b>Привет! Я твой финансовый помощник.</b>\n\n"
+        "Чтобы добавить расход напиши:\n<b>шаурма 100</b>\n\n"
+        "Чтобы добавить доход напиши:\n<b>+зарплата 50000</b>\n\n"
+        "Или используй кнопки ниже 👇",
         parse_mode="HTML",
         reply_markup=main_keyboard()
     )
 
 
-@dp.message(Command("stats"))
-async def stats_cmd(message: Message):
-    await show_stats(message.from_user.id, message)
+@dp.callback_query(F.data == "add_income")
+async def add_income_prompt(callback: CallbackQuery):
+    await callback.message.answer(
+        "💰 Напиши доход в формате:\n<b>+зарплата 50000</b>\n\nИли просто:\n<b>+50000</b>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "add_expense")
+async def add_expense_prompt(callback: CallbackQuery):
+    await callback.message.answer(
+        "💸 Напиши расход в формате:\n<b>шаурма 100</b> или <b>такси 250</b>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
 
 
 @dp.callback_query(F.data == "stats")
 async def stats_callback(callback: CallbackQuery):
-    await show_stats(callback.from_user.id, callback.message)
+    await show_stats(callback.from_user.id, callback.message, period="all")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "stats_day")
+async def stats_day_callback(callback: CallbackQuery):
+    await show_stats(callback.from_user.id, callback.message, period="day")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "stats_week")
+async def stats_week_callback(callback: CallbackQuery):
+    await show_stats(callback.from_user.id, callback.message, period="week")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "stats_month")
+async def stats_month_callback(callback: CallbackQuery):
+    await show_stats(callback.from_user.id, callback.message, period="month")
     await callback.answer()
 
 
 @dp.callback_query(F.data == "history")
 async def history_callback(callback: CallbackQuery):
     rows = await db.fetch(
-        'SELECT description, amount, category, created_at FROM transactions WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10',
+        'SELECT description, amount, category, type, created_at FROM transactions WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10',
         callback.from_user.id
     )
     if not rows:
-        await callback.message.answer("Расходов пока нет!")
+        await callback.message.answer("Записей пока нет!")
         await callback.answer()
         return
-    text = "📋 <b>Последние 10 расходов:</b>\n\n"
+    text = "📋 <b>Последние 10 записей:</b>\n\n"
     for row in rows:
         emoji = CATEGORY_EMOJI.get(row['category'], "📦")
         date = row['created_at'].strftime("%d.%m %H:%M")
-        text += f"{emoji} {row['description']} — {row['amount']}₽ <i>({date})</i>\n"
+        if row['type'] == 'income':
+            text += f"💰 +{row['amount']}₽ {row['description']} <i>({date})</i>\n"
+        else:
+            text += f"{emoji} {row['description']} — {row['amount']}₽ <i>({date})</i>\n"
     await callback.message.answer(text, parse_mode="HTML", reply_markup=main_keyboard())
     await callback.answer()
 
@@ -133,48 +181,106 @@ async def delete_last_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-async def show_stats(user_id: int, message: Message):
-    rows = await db.fetch(
-        'SELECT category, SUM(amount) as total FROM transactions WHERE user_id=$1 GROUP BY category ORDER BY total DESC',
-        user_id
+async def show_stats(user_id: int, message: Message, period: str = "all"):
+    if period == "day":
+        time_filter = "AND created_at >= NOW() - INTERVAL '1 day'"
+        period_name = "за сегодня"
+    elif period == "week":
+        time_filter = "AND created_at >= NOW() - INTERVAL '7 days'"
+        period_name = "за неделю"
+    elif period == "month":
+        time_filter = "AND created_at >= NOW() - INTERVAL '30 days'"
+        period_name = "за месяц"
+    else:
+        time_filter = ""
+        period_name = "за всё время"
+
+    expenses = await db.fetch(
+        f'SELECT category, SUM(amount) as total FROM transactions WHERE user_id=$1 AND type=$2 {time_filter} GROUP BY category ORDER BY total DESC',
+        user_id, 'expense'
     )
-    if not rows:
-        await message.answer("Расходов пока нет!")
+    income = await db.fetchval(
+        f'SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id=$1 AND type=$2 {time_filter}',
+        user_id, 'income'
+    )
+
+    if not expenses and not income:
+        await message.answer(f"Записей {period_name} нет!")
         return
-    total_all = sum(row['total'] for row in rows)
-    text = "📊 <b>Статистика по категориям:</b>\n\n"
-    for row in rows:
-        emoji = CATEGORY_EMOJI.get(row['category'], "📦")
-        percent = (row['total'] / total_all) * 100
-        text += f"{emoji} {row['category'].capitalize()} — {row['total']:.1f}₽ ({percent:.0f}%)\n"
-    text += f"\n💰 <b>Всего: {total_all:.1f}₽</b>"
+
+    total_expenses = sum(row['total'] for row in expenses)
+    balance = income - total_expenses
+
+    text = f"📊 <b>Статистика {period_name}:</b>\n\n"
+
+    if income > 0:
+        text += f"💰 <b>Доходы: {income:.0f}₽</b>\n\n"
+
+    if expenses:
+        text += "💸 <b>Расходы по категориям:</b>\n"
+        for row in expenses:
+            emoji = CATEGORY_EMOJI.get(row['category'], "📦")
+            percent = (row['total'] / total_expenses * 100) if total_expenses > 0 else 0
+            text += f"{emoji} {row['category'].capitalize()} — {row['total']:.0f}₽ ({percent:.0f}%)\n"
+        text += f"\n💸 <b>Итого расходов: {total_expenses:.0f}₽</b>\n"
+
+    if income > 0:
+        if balance >= 0:
+            text += f"\n✅ <b>Остаток: {balance:.0f}₽</b>"
+        else:
+            text += f"\n⚠️ <b>Перерасход: {abs(balance):.0f}₽</b>"
+
     await message.answer(text, parse_mode="HTML", reply_markup=main_keyboard())
 
 
 @dp.message()
-async def add_expense(message: Message):
-    match = re.match(r'^(.+?)\s+(\d+\.?\d*)$', message.text.strip())
-    if not match:
+async def handle_message(message: Message):
+    text = message.text.strip()
+
+    # Доход: +зарплата 50000 или +50000
+    income_match = re.match(r'^\+(.+?)\s+(\d+\.?\d*)$', text) or re.match(r'^\+(\d+\.?\d*)$', text)
+    if income_match:
+        if len(income_match.groups()) == 2:
+            description = income_match.group(1)
+            amount = float(income_match.group(2))
+        else:
+            description = "доход"
+            amount = float(income_match.group(1))
+
+        await db.execute(
+            'INSERT INTO transactions (user_id, description, amount, category, type) VALUES ($1, $2, $3, $4, $5)',
+            message.from_user.id, description, amount, "доход", "income"
+        )
         await message.answer(
-            "❌ Не понял. Напиши так:\n<b>кофе 4</b> или <b>такси 12.5</b>",
-            parse_mode="HTML",
+            f"💰 Записал доход: {description} — {amount:.0f}₽",
             reply_markup=main_keyboard()
         )
         return
-    description = match.group(1)
-    amount = float(match.group(2))
 
-    thinking_msg = await message.answer("🧠 Определяю категорию...")
-    category = await get_category_ai(description)
-    await thinking_msg.delete()
+    # Расход: шаурма 100
+    expense_match = re.match(r'^(.+?)\s+(\d+\.?\d*)$', text)
+    if expense_match:
+        description = expense_match.group(1)
+        amount = float(expense_match.group(2))
 
-    emoji = CATEGORY_EMOJI.get(category, "📦")
-    await db.execute(
-        'INSERT INTO transactions (user_id, description, amount, category) VALUES ($1, $2, $3, $4)',
-        message.from_user.id, description, amount, category
-    )
+        thinking_msg = await message.answer("🧠 Определяю категорию...")
+        category = await get_category_ai(description)
+        await thinking_msg.delete()
+
+        emoji = CATEGORY_EMOJI.get(category, "📦")
+        await db.execute(
+            'INSERT INTO transactions (user_id, description, amount, category, type) VALUES ($1, $2, $3, $4, $5)',
+            message.from_user.id, description, amount, category, "expense"
+        )
+        await message.answer(
+            f"✅ Записал: {description} — {amount:.0f}₽\n{emoji} Категория: {category}",
+            reply_markup=main_keyboard()
+        )
+        return
+
     await message.answer(
-        f"✅ Записал: {description} — {amount}₽\n{emoji} Категория: {category}",
+        "❌ Не понял. Напиши:\n<b>шаурма 100</b> — расход\n<b>+зарплата 50000</b> — доход",
+        parse_mode="HTML",
         reply_markup=main_keyboard()
     )
 
