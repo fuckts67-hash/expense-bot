@@ -68,7 +68,10 @@ def main_keyboard():
             InlineKeyboardButton(text="📅 За неделю", callback_data="stats_week"),
             InlineKeyboardButton(text="📅 За месяц", callback_data="stats_month"),
         ],
-        [InlineKeyboardButton(text="🗑 Удалить последнее", callback_data="delete_last")],
+        [
+            InlineKeyboardButton(text="👤 Мой профиль", callback_data="profile"),
+            InlineKeyboardButton(text="🗑 Удалить последнее", callback_data="delete_last"),
+        ],
     ])
 
 
@@ -93,6 +96,54 @@ async def init_db():
         pass
 
 
+async def show_profile(user_id: int, username: str, message: Message):
+    income = await db.fetchval(
+        "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id=$1 AND type='income' AND created_at >= DATE_TRUNC('month', NOW())",
+        user_id
+    )
+    total_expenses = await db.fetchval(
+        "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id=$1 AND type='expense' AND created_at >= DATE_TRUNC('month', NOW())",
+        user_id
+    )
+    balance = income - total_expenses
+
+    top_categories = await db.fetch(
+        "SELECT category, SUM(amount) as total FROM transactions WHERE user_id=$1 AND type='expense' AND created_at >= DATE_TRUNC('month', NOW()) GROUP BY category ORDER BY total DESC LIMIT 3",
+        user_id
+    )
+
+    top_text = ""
+    for row in top_categories:
+        emoji = CATEGORY_EMOJI.get(row['category'], "📦")
+        top_text += f"  {emoji} {row['category'].capitalize()} — {row['total']:.0f}₽\n"
+
+    if not top_text:
+        top_text = "  Пока нет данных\n"
+
+    biggest = top_categories[0]['category'].capitalize() if top_categories else "—"
+    biggest_emoji = CATEGORY_EMOJI.get(top_categories[0]['category'], "📦") if top_categories else ""
+    status = "✅ В плюсе" if balance >= 0 else "⚠️ Перерасход"
+
+    card = (
+        f"👤 <b>Профиль: {username}</b>\n"
+        f"{'─' * 28}\n"
+        f"💰 Доход:   <b>{income:.0f}₽</b>\n"
+        f"💸 Расход:  <b>{total_expenses:.0f}₽</b>\n"
+        f"{'─' * 28}\n"
+        f"🟢 Остаток: <b>{balance:.0f}₽</b>\n"
+        f"{'─' * 28}\n"
+        f"📌 Статус: {status}\n"
+        f"{'─' * 28}\n"
+        f"🔥 Основные траты:\n{top_text}"
+        f"{'─' * 28}\n"
+        f"💡 Больше всего уходит на {biggest_emoji} <b>{biggest}</b>\n"
+        f"{'─' * 28}\n"
+        f"📅 <i>За текущий месяц</i>"
+    )
+
+    await message.answer(card, parse_mode="HTML", reply_markup=main_keyboard())
+
+
 @dp.message(CommandStart())
 async def start(message: Message):
     await message.answer(
@@ -110,6 +161,21 @@ async def start(message: Message):
     )
 
 
+@dp.message(Command("акк"))
+async def profile_cmd(message: Message):
+    user = message.from_user
+    username = f"@{user.username}" if user.username else user.first_name
+    await show_profile(user.id, username, message)
+
+
+@dp.callback_query(F.data == "profile")
+async def profile_callback(callback: CallbackQuery):
+    user = callback.from_user
+    username = f"@{user.username}" if user.username else user.first_name
+    await show_profile(user.id, username, callback.message)
+    await callback.answer()
+
+
 @dp.callback_query(F.data == "about")
 async def about_callback(callback: CallbackQuery):
     await callback.message.answer(
@@ -117,11 +183,14 @@ async def about_callback(callback: CallbackQuery):
         "➕ <b>Доход</b> — нажми кнопку и напиши сумму\n"
         "➖ <b>Расход</b> — нажми кнопку и напиши трату\n"
         "📊 <b>Статистика</b> — за день, неделю, месяц\n"
-        "📋 <b>История</b> — последние 10 записей\n\n"
+        "📋 <b>История</b> — последние 10 записей\n"
+        "👤 <b>Профиль</b> — карточка с твоей статистикой\n\n"
         "🏷 <b>Категории определяются автоматически:</b>\n"
         "🍔 Еда · 🚕 Транспорт · ⛽ Авто\n"
         "💊 Здоровье · 🎬 Подписки · 🎮 Игры\n"
-        "👕 Одежда · 💻 Техника · ⚖️ Штрафы",
+        "👕 Одежда · 💻 Техника · ⚖️ Штрафы\n\n"
+        "💡 <b>Команды:</b>\n"
+        "/акк — посмотреть профиль",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🚀 Начать", callback_data="go")],
@@ -317,10 +386,7 @@ async def show_stats(user_id: int, message: Message, period: str = "all"):
 
 @dp.message()
 async def handle_message(message: Message):
-    await message.answer(
-        "Используй кнопки 👇",
-        reply_markup=main_keyboard()
-    )
+    await message.answer("Используй кнопки 👇", reply_markup=main_keyboard())
 
 
 async def main():
